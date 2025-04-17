@@ -3,27 +3,20 @@
 """
 Gacha Simulator
 ----------------
-基于指定的分段保底概率规则，模拟抽取五星角色的过程，优化为支持大规模模拟时使用 NumPy 向量化生成随机数以提升性能。
-
-功能：
-1. 构建每一发抽卡获得五星的概率表（长度80）。
-2. 重复模拟若干次抽卡，记录每次抽到五星所需抽数及是否为当期UP。
-3. 将结果打印到终端，并保存至 results.txt 文件。
-4. 统计总UP/非UP次数，并分别输出各自花费最多的抽数。
-5. 计算UP与非UP出现的模拟概率，保留小数点后五位。
-6. 若模拟次数大于10000，则仅在 results.txt 中输出统计摘要，省略每次模拟过程。
-7. 若第 n 次出金歪（非UP），则第 n+1 和第 n+2 次出金必定为UP。
-8. 显示抽出五星的平均抽数，以及抽出五次UP的平均数。
-9. 使用 NumPy 向量化方式加快大批量模拟。
-10. 支持用户输入已实际抽取的历史记录，并从当前状态继续模拟。
-11. 统计出金在70抽及以上和10抽及以下的情况（包含UP与非UP），并输出至终端及txt文件。
+模拟抽取五星角色过程，包含分段保底规则、歪机制、历史输入等。
+生成出金分布统计并保存直方图。
 """
 import random
 import sys
 import numpy as np
+import matplotlib.pyplot as plt
+import matplotlib
+matplotlib.rcParams['font.sans-serif'] = ['SimHei']  # 设置中文字体为黑体（SimHei）
+matplotlib.rcParams['axes.unicode_minus'] = False    # 正确显示负号
+
 
 def build_probability_schedule():
-    """构建从第1抽到第80抽的出五星概率表，符合分段提升机制。"""
+    """构建出五星概率表（长度为80），按抽数递增概率。"""
     p = [0.0] * 80
     for i in range(1, 81):
         if i <= 65:
@@ -35,39 +28,31 @@ def build_probability_schedule():
         elif 76 <= i <= 79:
             p[i-1] = p[i-2] + 0.10
         else:
-            p[i-1] = 1.0
+            p[i-1] = 1.0  # 第80抽必出五星
         if p[i-1] > 1.0:
             p[i-1] = 1.0
     return p
 
 def simulate_one_run(p_schedule, up_guarantee_counter):
-    """
-    单次模拟抽取过程，返回：
-    - 抽数 draw_count
-    - 是否为UP角色 is_up
-    - 更新后的UP保底计数器 up_guarantee_counter
-    """
+    """单次模拟，使用概率表决定何时出五星，考虑歪机制。"""
     for draw_count, p in enumerate(p_schedule, start=1):
-        if random.random() < p or draw_count == 80:  # 强制第80抽必中
+        if random.random() < p or draw_count == 80:
             if up_guarantee_counter > 0:
                 return draw_count, True, up_guarantee_counter - 1
             is_up = (random.random() < 0.5)
             if not is_up:
-                return draw_count, False, 2  # 歪了则接下来2次必定为UP
+                return draw_count, False, 2
             return draw_count, True, 0
-    return 80, True, max(0, up_guarantee_counter - 1)  # 理论不会执行到这
+    return 80, True, max(0, up_guarantee_counter - 1)
 
 def simulate_with_numpy(n, p_schedule, up_guarantee_counter_start=0):
-    """
-    使用 NumPy 向量化模拟多次抽卡
-    返回一个 (抽数, 是否为UP) 的结果列表
-    """
+    """大规模模拟，使用NumPy向量化随机数，提升效率。"""
     results = []
     up_guarantee_counter = up_guarantee_counter_start
     for _ in range(n):
         rand = np.random.random(80)
         for draw_count, p in enumerate(p_schedule, start=1):
-            if rand[draw_count-1] < p or draw_count == 80:  # 第80抽强制命中
+            if rand[draw_count-1] < p or draw_count == 80:
                 if up_guarantee_counter > 0:
                     results.append((draw_count, True))
                     up_guarantee_counter -= 1
@@ -82,6 +67,7 @@ def simulate_with_numpy(n, p_schedule, up_guarantee_counter_start=0):
     return results
 
 def main():
+    # -------- 用户输入：总模拟次数和历史出金记录 --------
     try:
         total_simulations = int(input("请输入总模拟次数（整数）："))
         real_count = int(input("请输入你在游戏中已抽取的五星次数（如 3）："))
@@ -111,6 +97,7 @@ def main():
             except:
                 print("格式错误，请输入格式如：58 不歪 或 44 歪")
 
+    # -------- 模拟抽卡 --------
     n = total_simulations - real_count
     p_schedule = build_probability_schedule()
     results = real_history.copy()
@@ -129,6 +116,7 @@ def main():
 
     results.extend(simulated)
 
+    # -------- 统计分析 --------
     total_draws = sum(d for d, _ in results)
     up_draws = [d for d, u in results if u]
     non_up_draws = [d for d, u in results if not u]
@@ -142,17 +130,11 @@ def main():
     average_draws_per_five_up = sum(up_draws) / total_up if total_up > 0 else 0
     average_total_draws_per_up = total_draws / total_up if total_up > 0 else 0
 
-    # 新增统计：高抽数出金/低抽数出金
     over_70 = [(d, u) for d, u in results if d >= 70]
-    over_70_total = len(over_70)
-    over_70_up = len([1 for d, u in over_70 if u])
-
     under_10 = [(d, u) for d, u in results if d <= 10]
-    under_10_total = len(under_10)
-    under_10_up = len([1 for d, u in under_10 if u])
 
-    output_file = "results.txt"
-    with open(output_file, "w", encoding="utf-8") as f:
+    # -------- 写入结果文件 --------
+    with open("results.txt", "w", encoding="utf-8") as f:
         if enable_console_output:
             f.write("模拟序号, 抽数, 是否UP\n")
             for idx, (draws, is_up) in enumerate(results, start=1):
@@ -166,19 +148,37 @@ def main():
         f.write(f"非UP 概率: {prob_non_up:.5f}\n")
         f.write(f"平均每次出五星所需抽数: {average_draws_per_five_star:.5f}\n")
         f.write(f"平均出一个UP五星所需抽数: {average_draws_per_five_up:.5f}\n")
-        f.write("\n高于70抽出五星次数: {}，其中为UP的次数: {}\n".format(over_70_total, over_70_up))
-        f.write("低于等于10抽出五星次数: {}，其中为UP的次数: {}\n".format(under_10_total, under_10_up))
+        f.write(f"\n高于70抽出五星次数: {len(over_70)}，其中为UP的次数: {len([1 for d, u in over_70 if u])}\n")
+        f.write(f"低于等于10抽出五星次数: {len(under_10)}，其中为UP的次数: {len([1 for d, u in under_10 if u])}\n")
 
-    print(f"\n已将所有结果保存至当前目录下的 {output_file}")
+    # -------- 输出统计到终端 --------
+    print(f"\n已将所有结果保存至当前目录下的 results.txt")
     print("\n统计结果：")
     print(f"总 UP 次数: {total_up}, 最大花费抽数: {max_draws_up}")
     print(f"总 非UP 次数: {total_non_up}, 最大花费抽数: {max_draws_non_up}")
     print(f"UP 概率: {prob_up:.5f}")
     print(f"非UP 概率: {prob_non_up:.5f}")
     print(f"平均每次出五星所需抽数: {average_draws_per_five_star:.5f}")
-    print(f"平均抽到一个UP五星所需总抽数（含歪）: {average_total_draws_per_up:.5f}")
-    print(f"高于70抽出五星次数: {over_70_total}，其中为UP的次数: {over_70_up}")
-    print(f"低于等于10抽出五星次数: {under_10_total}，其中为UP的次数: {under_10_up}")
+    print(f"平均出一个UP五星所需抽数: {average_draws_per_five_up:.5f}")
+    print(f"高于70抽出五星次数: {len(over_70)}，其中为UP的次数: {len([1 for d, u in over_70 if u])}")
+    print(f"低于等于10抽出五星次数: {len(under_10)}，其中为UP的次数: {len([1 for d, u in under_10 if u])}")
+
+    # -------- 绘制中间 20% 抽数分布直方图 --------
+    mid_start = int(total_simulations * 0.25)
+    mid_end = int(total_simulations * 0.75)
+    middle_range_draws = [results[i][0] for i in range(mid_start, mid_end)]
+
+    plt.figure(figsize=(10, 6))
+    plt.hist(middle_range_draws, bins=range(1, 82), color='skyblue', edgecolor='black')
+    plt.title(f'中间 50% 模拟（第 {mid_start+1}~{mid_end} 次）出金抽数分布')
+    plt.xlabel('抽数')
+    plt.ylabel('出现次数')
+    plt.grid(axis='y', linestyle='--', alpha=0.7)
+    plt.tight_layout()
+    image_path = "mid_20_percent_hist.png"
+    plt.savefig(image_path, dpi=300)
+    plt.show()
+    print(f" 直方图已保存为：{image_path}")
 
 if __name__ == "__main__":
     main()
